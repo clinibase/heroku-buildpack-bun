@@ -13,9 +13,13 @@ BP_DIR=$(cd "$(dirname "${0:-}")"; cd ..; pwd)
 
 ### Load dependencies
 source "$BP_DIR/lib/json.sh"
+source "$BP_DIR/lib/cache.sh"
+source "$BP_DIR/lib/output.sh"
 
 HEROKU_DIR=$BUILD_DIR/.heroku
 BIN_DIR=$HEROKU_DIR/bin
+
+export BUN_INSTALL_CACHE_DIR="$BUILD_DIR/.bun-cache"
 
 # To enable the local source build cache path, copy the files and match the build path with the startup path.
 cp -rp $BUILD_DIR $HOME
@@ -39,7 +43,7 @@ elif [ -f $BUILD_DIR/runtime.txt ]
 then
   BUN_VERSION="$(cat $BUILD_DIR/runtime.txt)"
 fi
-echo "Installing Bun $BUN_VERSION"
+header "Installing Bun $BUN_VERSION"
 
 if [[ -n $BUN_VERSION ]]
 then
@@ -66,38 +70,94 @@ echo 'export BUN_DIR="$HOME/.heroku/cache"' >> $PROFILE_PATH
 echo "export PATH=\"$BUILD_DIR/.heroku/bin:\$PATH\"" >> "$BP_DIR/export"
 echo "export BUN_DIR=\"$BUILD_DIR/.heroku/cache\"" >> "$BP_DIR/export"
 
-echo "Installed Bun v$(bun --version)"
+header "Installed Bun v$(bun --version)"
 
 set +e
+
+restore_cache() {
+  local cache_status cache_directories
+
+  cache_status="$(get_cache_status "$CACHE_DIR")"
+  cache_directories="$(get_cache_directories "$BUILD_DIR")"
+
+  if [[ "$cache_status" == "disabled" ]]; then
+    header "Restoring cache"
+    echo "Caching has been disabled because BUN_CACHE=${BUN_CACHE}"
+  elif [[ "$cache_status" == "valid" ]]; then
+    header "Restoring cache"
+    restore_default_cache_directories "$BUILD_DIR" "$CACHE_DIR" "$BUN_INSTALL_CACHE_DIR"
+    if [[ "$cache_directories" != "" ]]; then
+      restore_custom_cache_directories "$BUILD_DIR" "$CACHE_DIR" "$cache_directories"
+    fi
+  elif [[ "$cache_status" == "new-signature" ]]; then
+    header "Restoring cache"
+    echo "Cached directories were not restored due to a change in version of bun or stack"
+    echo "Module installation may take longer for this build"
+    if [[ "$cache_directories" != "" ]]; then
+      # If the user has specified custom cache directories, be more explicit
+      echo "Invalidating cache due to a change in version of node, npm, yarn or stack"
+      echo "Will not restore the following directories for this build:"
+      for directory in $cache_directories; do
+        echo "  $directory"
+      done
+    fi
+  else
+    # No cache exists, be silent
+    :
+  fi
+}
+
+cache_build() {
+  local cache_directories
+  cache_directories="$(get_cache_directories "$BUILD_DIR")"
+
+  clear_cache "$CACHE_DIR"
+  if ! ${BUN_CACHE:-true}; then
+    # we've already warned that caching is disabled in the restore step
+    # so be silent here
+    :
+  else
+    header "Caching build"
+    save_default_cache_directories "$BUILD_DIR" "$CACHE_DIR" "$BUN_INSTALL_CACHE_DIR"
+    if [[ "$cache_directories" != "" ]]; then
+      save_custom_cache_directories "$BUILD_DIR" "$CACHE_DIR" "$cache_directories"
+    fi
+  fi
+  save_signature "$CACHE_DIR"
+}
+
+restore_cache
 
 cd $BUILD_DIR
 
 # download dependencies
 if [[ -f package.json && ! -f .skip-bun-install ]]
 then
-  echo "Installing dependencies..."
+  header "Installing dependencies..."
   bun install
 fi
 
 has_heroku_prebuild_script=$(has_script "package.json" "heroku-prebuild")
 if [[ "$has_heroku_prebuild_script" == "true" && ! -f .skip-bun-heroku-prebuild ]]
 then
-  echo "Running Heroku prebuild script..."
+  header "Running Heroku prebuild script..."
   bun run heroku-prebuild
 fi
 
 has_build_script=$(has_script "package.json" "build")
 if [[ "$has_build_script" == "true" && ! -f .skip-bun-build ]]
 then
-  echo "Building application..."
+  header "Building application..."
   bun run build
-  echo "Done building application..."
+  header "Done building application..."
 fi
+
+cache_build
 
 has_heroku_postbuild_script=$(has_script "package.json" "heroku-postbuild")
 if [[ "$has_heroku_postbuild_script" == "true" && ! -f .skip-bun-heroku-postbuild ]]
 then
-  echo "Running Heroku postbuild script..."
+  header "Running Heroku postbuild script..."
   bun run heroku-postbuild
 fi
 
