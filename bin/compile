@@ -21,8 +21,10 @@ BIN_DIR=$HEROKU_DIR/bin
 
 export BUN_INSTALL_CACHE_DIR="$BUILD_DIR/.bun-cache"
 
-# To enable the local source build cache path, copy the files and match the build path with the startup path.
-cp -rp $BUILD_DIR $HOME
+if [ "$BUILD_DIR" != "$HOME" ]; then
+  cp -rp $BUILD_DIR $HOME
+fi
+
 cd $HOME
 
 # Export the content of the ENV_DIR into the environment
