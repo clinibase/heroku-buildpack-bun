@@ -74,8 +74,6 @@ echo "export BUN_DIR=\"$BUILD_DIR/.heroku/cache\"" >> "$BP_DIR/export"
 
 header "Installed Bun v$(bun --version)"
 
-set +e
-
 restore_cache() {
   local cache_status cache_directories
 
