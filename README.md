@@ -25,7 +25,9 @@ heroku config:unset NODE_INSTALLER -a <app>        # roll back
 ```
 
 The aube version comes from `AUBE_VERSION`, or from `aube = "x.y.z"` in the repo's `mise.toml`.
-With neither, an aube build fails before installing anything.
+With neither, an aube build fails before installing anything. The downloaded tarball must match a
+pinned SHA-256: versions known to the buildpack are listed in `bin/compile`; for any other version
+set `AUBE_SHA256` on the app to the digest of the `x86_64-unknown-linux-gnu` tarball.
 
 ## Support scripts
 
