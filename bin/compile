@@ -74,6 +74,71 @@ echo "export BUN_DIR=\"$BUILD_DIR/.heroku/cache\"" >> "$BP_DIR/export"
 
 header "Installed Bun v$(bun --version)"
 
+# NODE_INSTALLER=aube routes this build through aube (https://github.com/aubepkg/aube):
+# aube is installed next to bun, and a `bun` shim is put first on PATH that turns
+# `bun install` into `aube install` and passes every other bun command through.
+# The root install and any nested `bun install` in postinstall/build scripts then
+# use ONE installer, so one config var flips the whole build. Unset (the default)
+# is today's behaviour, unchanged. Opt in:  heroku config:set NODE_INSTALLER=aube
+# Roll back:                                heroku config:unset NODE_INSTALLER
+# The aube version comes from AUBE_VERSION, else from `aube = "x.y.z"` in mise.toml.
+if [[ "${NODE_INSTALLER:-bun}" == "aube" ]]; then
+  if [[ -z "${AUBE_VERSION:-}" && -f "$BUILD_DIR/mise.toml" ]]; then
+    AUBE_VERSION="$(grep -E '^[[:space:]]*aube[[:space:]]*=[[:space:]]*"[^"]+"' "$BUILD_DIR/mise.toml" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+  fi
+  if [[ -z "${AUBE_VERSION:-}" ]]; then
+    header "NODE_INSTALLER=aube but no aube version found: set AUBE_VERSION or pin aube in mise.toml"
+    exit 1
+  fi
+  # The version is interpolated into a URL and a path: plain semver only.
+  if [[ ! "$AUBE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?$ ]]; then
+    header "AUBE_VERSION '$AUBE_VERSION' is not a version number"
+    exit 1
+  fi
+  # Integrity: the tarball must match a pinned SHA-256. Known versions are
+  # listed here; any other version needs AUBE_SHA256 set on the app. aube
+  # publishes a sigstore bundle rather than a checksum file, and the build
+  # image has no cosign, so a pinned digest is the check we can do.
+  case "$AUBE_VERSION" in
+    2.2.13) AUBE_SHA256_KNOWN="0b0e734d5fe6e90a286229136d1e97e217b1836e297408cbf9d07cd020cfb4c2" ;;
+    *) AUBE_SHA256_KNOWN="" ;;
+  esac
+  AUBE_SHA256="${AUBE_SHA256:-$AUBE_SHA256_KNOWN}"
+  header "Installing aube $AUBE_VERSION"
+  AUBE_URL="https://github.com/aubepkg/aube/releases/download/v${AUBE_VERSION}/aube-v${AUBE_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+  if [[ -z "$AUBE_SHA256" ]]; then
+    header "no pinned SHA-256 for aube $AUBE_VERSION: set AUBE_SHA256 to the sha256 of $AUBE_URL"
+    exit 1
+  fi
+  AUBE_TGZ="$(mktemp "$BUILD_DIR/.aube-XXXXXX")"
+  curl -fsSL --retry-connrefused --retry 3 -o "$AUBE_TGZ" "$AUBE_URL"
+  if ! echo "$AUBE_SHA256  $AUBE_TGZ" | sha256sum -c --quiet - >/dev/null 2>&1; then
+    header "aube tarball does not match the pinned SHA-256; refusing to install it"
+    rm -f "$AUBE_TGZ"
+    exit 1
+  fi
+  tar -xzf "$AUBE_TGZ" -C "$BIN_DIR" aube
+  rm -f "$AUBE_TGZ"
+  chmod +x "$BIN_DIR/aube"
+  SHIM_DIR="$HEROKU_DIR/shims"
+  mkdir -p "$SHIM_DIR"
+  cat > "$SHIM_DIR/bun" <<SHIM
+#!/usr/bin/env bash
+# Build-time shim written by heroku-buildpack-bun (NODE_INSTALLER=aube).
+if [[ "\${1:-}" == "install" || "\${1:-}" == "i" ]]; then
+  shift
+  exec "$BIN_DIR/aube" install "\$@"
+fi
+exec "$BIN_DIR/bun" "\$@"
+SHIM
+  chmod +x "$SHIM_DIR/bun"
+  export PATH="$SHIM_DIR:$PATH"
+  # subsequent buildpacks in this build see the shim too; the runtime PATH
+  # (.profile.d) does not, so dynos run the real bun.
+  echo "export PATH=\"$BUILD_DIR/.heroku/shims:\$PATH\"" >> "$BP_DIR/export"
+  header "Installed aube $(aube --version | head -1); bun install -> aube install for this build"
+fi
+
 restore_cache() {
   local cache_status cache_directories
 
