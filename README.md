@@ -12,6 +12,21 @@ You'll either need a [`Procfile`](https://devcenter.heroku.com/articles/procfile
 
 Pin a certain Bun version such as `v1.1.20` with the `BUN_VERSION` environment variable (eg under 'Config Vars' on your app's Heroku settings page), or with a `.bun-version`, `runtime.bun.txt` or `runtime.txt` containing a single line for the pinned version. The version can be specified with or without a leading `v` eg `v1.0.7` or `1.0.7` or [any other Bun tags](https://github.com/oven-sh/bun/tags).
 
+## Installing with aube instead of bun
+
+Set `NODE_INSTALLER=aube` on the app and the build installs [aube](https://github.com/aubepkg/aube)
+next to bun and routes every `bun install` in the build (root install, `postinstall`, build scripts)
+through `aube install`. bun stays the runtime and script runner. Unset, the build behaves exactly as
+before.
+
+```
+heroku config:set NODE_INSTALLER=aube -a <app>     # opt in
+heroku config:unset NODE_INSTALLER -a <app>        # roll back
+```
+
+The aube version comes from `AUBE_VERSION`, or from `aube = "x.y.z"` in the repo's `mise.toml`.
+With neither, an aube build fails before installing anything.
+
 ## Support scripts
 
 This buildpack automatically runs the following bun commands and scripts if defined in `package.json`.

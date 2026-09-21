@@ -74,6 +74,45 @@ echo "export BUN_DIR=\"$BUILD_DIR/.heroku/cache\"" >> "$BP_DIR/export"
 
 header "Installed Bun v$(bun --version)"
 
+# NODE_INSTALLER=aube routes this build through aube (https://github.com/aubepkg/aube):
+# aube is installed next to bun, and a `bun` shim is put first on PATH that turns
+# `bun install` into `aube install` and passes every other bun command through.
+# The root install and any nested `bun install` in postinstall/build scripts then
+# use ONE installer, so one config var flips the whole build. Unset (the default)
+# is today's behaviour, unchanged. Opt in:  heroku config:set NODE_INSTALLER=aube
+# Roll back:                                heroku config:unset NODE_INSTALLER
+# The aube version comes from AUBE_VERSION, else from `aube = "x.y.z"` in mise.toml.
+if [[ "${NODE_INSTALLER:-bun}" == "aube" ]]; then
+  if [[ -z "${AUBE_VERSION:-}" && -f "$BUILD_DIR/mise.toml" ]]; then
+    AUBE_VERSION="$(grep -E '^[[:space:]]*aube[[:space:]]*=[[:space:]]*"[^"]+"' "$BUILD_DIR/mise.toml" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+  fi
+  if [[ -z "${AUBE_VERSION:-}" ]]; then
+    header "NODE_INSTALLER=aube but no aube version found: set AUBE_VERSION or pin aube in mise.toml"
+    exit 1
+  fi
+  header "Installing aube $AUBE_VERSION"
+  AUBE_URL="https://github.com/aubepkg/aube/releases/download/v${AUBE_VERSION}/aube-v${AUBE_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+  curl -fsSL --retry-connrefused --retry 3 "$AUBE_URL" | tar -xz -C "$BIN_DIR" aube
+  chmod +x "$BIN_DIR/aube"
+  SHIM_DIR="$HEROKU_DIR/shims"
+  mkdir -p "$SHIM_DIR"
+  cat > "$SHIM_DIR/bun" <<SHIM
+#!/usr/bin/env bash
+# Build-time shim written by heroku-buildpack-bun (NODE_INSTALLER=aube).
+if [[ "\${1:-}" == "install" || "\${1:-}" == "i" ]]; then
+  shift
+  exec "$BIN_DIR/aube" install "\$@"
+fi
+exec "$BIN_DIR/bun" "\$@"
+SHIM
+  chmod +x "$SHIM_DIR/bun"
+  export PATH="$SHIM_DIR:$PATH"
+  # subsequent buildpacks in this build see the shim too; the runtime PATH
+  # (.profile.d) does not, so dynos run the real bun.
+  echo "export PATH=\"$BUILD_DIR/.heroku/shims:\$PATH\"" >> "$BP_DIR/export"
+  header "Installed aube $(aube --version | head -1); bun install -> aube install for this build"
+fi
+
 restore_cache() {
   local cache_status cache_directories
 
